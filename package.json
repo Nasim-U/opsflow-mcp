@@ -1,7 +1,7 @@
 {
   "name": "opsflow-mcp",
   "version": "1.0.0",
-  "description": "Production Model Context Protocol (MCP) server, guardrailed SQL analytics tools, reusable agent skills, and automated ops workflow engine",
+  "description": "Model Context Protocol (MCP) server in Node.js for read-only SQL analytics, dataset freshness checks, workflow playbooks, and JSON-RPC evals",
   "type": "module",
   "license": "MIT",
   "author": "Nasim Uddin (@Nasim-U)",
@@ -17,6 +17,7 @@
   },
   "scripts": {
     "test": "node --test tests/opsflow.test.mjs",
+    "eval": "node src/evals.mjs",
     "demo": "node src/cli.mjs demo",
     "serve:stdio": "node src/cli.mjs serve-stdio",
     "serve:http": "node src/cli.mjs serve-http"
@@ -29,6 +30,7 @@
     "analytics-engineering",
     "sql-guardrails",
     "sqlite",
-    "llm-tools"
+    "llm-tools",
+    "evals"
   ]
 }

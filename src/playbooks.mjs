@@ -269,10 +269,6 @@ function buildPlaybookSteps(playbookId, db, params) {
   ];
 }
 
-/**
- * Executes a declarative multi-step operational playbook with bounded retries,
- * dry-run safety isolation, and an immutable step-by-step audit trail.
- */
 export async function runAutomationPlaybook(
   db,
   {

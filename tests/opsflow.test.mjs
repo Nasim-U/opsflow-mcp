@@ -11,12 +11,13 @@ import {
   startHttpServer,
   startStdioServer
 } from '../src/mcp-server.mjs';
+import { runEvalSuite } from '../src/evals.mjs';
 import { runDemo } from '../src/cli.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
 
-describe('OpsFlow MCP Server — Protocol, Guardrails, Tools & Transports', () => {
+describe('OpsFlow MCP Server: protocol, guardrails, workbench, and evals', () => {
   const openServers = [];
 
   afterEach(async () => {
@@ -48,7 +49,6 @@ describe('OpsFlow MCP Server — Protocol, Guardrails, Tools & Transports', () =
     assert.ok(init.result.capabilities.resources);
     assert.ok(init.result.capabilities.prompts);
 
-    // JSON-RPC notifications must return null
     const notif = await mcp.handleRequest({
       jsonrpc: '2.0',
       method: 'notifications/initialized'
@@ -126,7 +126,7 @@ describe('OpsFlow MCP Server — Protocol, Guardrails, Tools & Transports', () =
     assert.match(third.error.message, /Rate limit exceeded/);
   });
 
-  it('executes valid SELECT & CTE queries while preserving string literals with semicolons/keywords', async () => {
+  it('executes valid SELECT and CTE queries while preserving string literals with semicolons and keywords', async () => {
     const mcp = createOpsFlowMcpServer();
     openServers.push(mcp);
 
@@ -190,7 +190,7 @@ describe('OpsFlow MCP Server — Protocol, Guardrails, Tools & Transports', () =
     assert.equal(payload.telemetry.truncated, true);
   });
 
-  it('blocks SQL injection, DDL/DML mutations, system catalogs, and engine writes', async () => {
+  it('blocks SQL injection, comment-split keywords, DDL/DML mutations, system catalogs, and engine writes', async () => {
     const mcp = createOpsFlowMcpServer();
     openServers.push(mcp);
 
@@ -200,11 +200,15 @@ describe('OpsFlow MCP Server — Protocol, Guardrails, Tools & Transports', () =
         expectedCode: 'MULTI_STATEMENT_BLOCKED'
       },
       {
-        sql: 'DELETE FROM accounts WHERE status = \'churned\'',
+        sql: "DELETE FROM accounts WHERE status = 'churned'",
         expectedCode: 'NON_SELECT_ROOT_BLOCKED'
       },
       {
         sql: 'WITH evil AS (SELECT 1) DROP TABLE accounts',
+        expectedCode: 'FORBIDDEN_SQL_KEYWORD'
+      },
+      {
+        sql: 'WITH evil AS (SELECT 1) DR/**/OP TABLE accounts',
         expectedCode: 'FORBIDDEN_SQL_KEYWORD'
       },
       {
@@ -213,6 +217,10 @@ describe('OpsFlow MCP Server — Protocol, Guardrails, Tools & Transports', () =
       },
       {
         sql: 'SELECT * FROM accounts WHERE 1=1 UNION SELECT 1,2,3,4,5,6,7,8,9,10,11,12,13 FROM sqlite_master',
+        expectedCode: 'SYSTEM_CATALOG_BLOCKED'
+      },
+      {
+        sql: 'SELECT name FROM sqlite_/**/master',
         expectedCode: 'SYSTEM_CATALOG_BLOCKED'
       },
       {
@@ -239,7 +247,6 @@ describe('OpsFlow MCP Server — Protocol, Guardrails, Tools & Transports', () =
       assert.equal(res.result.structuredContent.error.code, vector.expectedCode);
     }
 
-    // Verify engine-level SQLite PRAGMA query_only lock as second line of defense
     const db = createOpsWarehouse({ lockReadOnly: true });
     assert.throws(() => {
       db.exec("INSERT INTO accounts VALUES ('x','x','SMB','NA',1,12,1,1,50,'2026-12-01','x','active','2026-04-13')");
@@ -312,7 +319,6 @@ describe('OpsFlow MCP Server — Protocol, Guardrails, Tools & Transports', () =
     const mcp = createOpsFlowMcpServer();
     openServers.push(mcp);
 
-    // 1. Transient failure recovery in dry-run mode
     const recovered = await mcp.handleRequest({
       jsonrpc: '2.0',
       id: 50,
@@ -337,7 +343,6 @@ describe('OpsFlow MCP Server — Protocol, Guardrails, Tools & Transports', () =
     assert.equal(crmStep.status, 'recovered_after_retry');
     assert.equal(crmStep.attempts, 3);
 
-    // 2. Live commit mode on Monday-kpi-brief (verifies case-insensitive normalization)
     const liveBrief = await mcp.handleRequest({
       jsonrpc: '2.0',
       id: 51,
@@ -354,7 +359,6 @@ describe('OpsFlow MCP Server — Protocol, Guardrails, Tools & Transports', () =
     assert.equal(liveBrief.result.structuredContent.playbook, 'monday-kpi-brief');
     assert.equal(liveBrief.result.structuredContent.summary.sideEffectsCommitted, 1);
 
-    // 3. Exhausted retries marks tool response isError=true
     const exhausted = await mcp.handleRequest({
       jsonrpc: '2.0',
       id: 52,
@@ -417,10 +421,38 @@ describe('OpsFlow MCP Server — Protocol, Guardrails, Tools & Transports', () =
     assert.equal(promptMissingArg.error.code, -32602);
   });
 
-  it('serves MCP over HTTP on port 8762 and over stdio streams cleanly', async () => {
-    // 1. HTTP transport on assigned test port 8762
+  it('passes all 18 deterministic evaluation benchmark cases with 0% false positives', async () => {
+    const report = await runEvalSuite();
+    assert.equal(report.summary.totalCases, 18);
+    assert.equal(report.summary.passedCases, 18);
+    assert.equal(report.summary.failedCases, 0);
+    assert.equal(report.summary.scoreLabel, '18/18');
+    assert.equal(report.summary.falsePositiveRatePct, 0);
+    assert.equal(report.summary.attackBlockRatePct, 100);
+    assert.equal(report.categories.length, 4);
+  });
+
+  it('serves workbench HTML (GET /), evals JSON (GET /evals), MCP RPC (POST /mcp) on port 8762, and stdio cleanly', async () => {
     const httpSrv = await startHttpServer({ host: '127.0.0.1', port: 8762 });
     openServers.push(httpSrv);
+
+    const uiResp = await fetch(httpSrv.workbenchUrl);
+    assert.equal(uiResp.status, 200);
+    assert.match(uiResp.headers.get('content-type') ?? '', /text\/html/);
+    const uiHtml = await uiResp.text();
+    assert.match(uiHtml, /opsflow-mcp/);
+    assert.match(uiHtml, /query_analytics_readonly/);
+    assert.match(uiHtml, /Evaluation benchmark/);
+    assert.equal(uiHtml.includes('\u2014'), false, 'Workbench HTML must not contain em dashes');
+    assert.equal(uiHtml.includes('\u00b7'), false, 'Workbench HTML must not contain middle dots');
+    assert.equal(uiHtml.includes('\u2192'), false, 'Workbench HTML must not contain right arrows');
+
+    const evalsResp = await fetch(httpSrv.evalsUrl);
+    assert.equal(evalsResp.status, 200);
+    const evalsJson = await evalsResp.json();
+    assert.equal(evalsJson.summary.totalCases, 18);
+    assert.equal(evalsJson.summary.passedCases, 18);
+    assert.equal(evalsJson.summary.falsePositiveRatePct, 0);
 
     const healthResp = await fetch(httpSrv.healthUrl);
     assert.equal(healthResp.status, 200);
@@ -445,11 +477,9 @@ describe('OpsFlow MCP Server — Protocol, Guardrails, Tools & Transports', () =
     const rpcJson = await rpcResp.json();
     assert.equal(rpcJson.result.structuredContent.rows[0].account_count, 12);
 
-    // Immediately release port 8762
     await httpSrv.close();
     openServers.pop();
 
-    // 2. Stdio transport framing check
     const input = new PassThrough();
     const output = new PassThrough();
     const errorOutput = new PassThrough();
@@ -480,7 +510,8 @@ describe('OpsFlow MCP Server — Protocol, Guardrails, Tools & Transports', () =
     assert.match(stderrChunks.join(''), /\[opsflow-audit\]/);
   });
 
-  it('ships valid Agent Skill definitions and XML-clean SVG documentation assets', async () => {
+  it('ships valid Agent Skill definitions, clean prose without em dashes, and real PNG screenshots', async () => {
+    const readme = await fs.readFile(path.join(repoRoot, 'README.md'), 'utf8');
     const analystSkill = await fs.readFile(
       path.join(repoRoot, 'skills', 'warehouse-analyst', 'SKILL.md'),
       'utf8'
@@ -490,18 +521,24 @@ describe('OpsFlow MCP Server — Protocol, Guardrails, Tools & Transports', () =
       'utf8'
     );
 
+    assert.match(readme, /^# opsflow-mcp/m);
+    assert.match(readme, /docs\/mcp-inspector\.png/);
+    assert.match(readme, /docs\/eval-suite\.png/);
+    assert.equal(readme.includes('\u2014'), false, 'README.md must not contain em dashes');
+    assert.equal(analystSkill.includes('\u2014'), false, 'warehouse-analyst SKILL.md must not contain em dashes');
+    assert.equal(digestSkill.includes('\u2014'), false, 'weekly-ops-digest SKILL.md must not contain em dashes');
+
     assert.match(analystSkill, /^---\r?\nname: warehouse-analyst/m);
     assert.match(analystSkill, /query_analytics_readonly/);
     assert.match(digestSkill, /^---\r?\nname: weekly-ops-digest/m);
     assert.match(digestSkill, /run_automation_playbook/);
 
-    const previewSvg = await fs.readFile(path.join(repoRoot, 'docs', 'mcp-preview.svg'), 'utf8');
-    const archSvg = await fs.readFile(
-      path.join(repoRoot, 'docs', 'workflow-architecture.svg'),
-      'utf8'
-    );
-    assert.match(previewSvg, /<svg[^>]+viewBox="0 0 1120 620"/);
-    assert.match(archSvg, /<svg[^>]+viewBox="0 0 1120 500"/);
+    const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    for (const fileName of ['mcp-inspector.png', 'eval-suite.png']) {
+      const buf = await fs.readFile(path.join(repoRoot, 'docs', fileName));
+      assert.ok(buf.length > 50_000, `${fileName} should be a full Retina screenshot (>50KB)`);
+      assert.deepEqual(buf.subarray(0, 8), pngSignature, `${fileName} must have valid PNG header`);
+    }
   });
 
   it('supports scoped single-table dataset audits and rejects unknown datasets cleanly', async () => {
@@ -565,7 +602,7 @@ describe('OpsFlow MCP Server — Protocol, Guardrails, Tools & Transports', () =
     assert.ok(Array.isArray(blocksOnly.result.structuredContent.slackBlockKit.blocks));
   });
 
-  it('runs the end-to-end interactive CLI inspector demo without errors', async () => {
+  it('runs the end-to-end CLI protocol trace without errors', async () => {
     const originalLog = console.log;
     const captured = [];
     console.log = (...args) => captured.push(args.join(' '));

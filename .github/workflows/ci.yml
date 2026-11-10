@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   verify:
-    name: MCP Protocol, Guardrails & Playbook Suite (Node 24)
+    name: MCP Protocol, Guardrails, Workbench & Evals (Node 24)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -23,12 +23,25 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Validate SVG visual assets XML syntax
+      - name: Verify screenshot PNG assets
         run: |
-          python3 -c "import xml.etree.ElementTree as ET; [ET.parse(p) for p in ['docs/mcp-preview.svg', 'docs/workflow-architecture.svg']]; print('SVG XML validation passed.')"
+          node -e "
+          const fs = require('node:fs');
+          const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+          for (const p of ['docs/mcp-inspector.png', 'docs/eval-suite.png']) {
+            const buf = fs.readFileSync(p);
+            if (buf.length < 50000 || !buf.subarray(0, 8).equals(sig)) {
+              throw new Error('Invalid screenshot asset: ' + p);
+            }
+          }
+          console.log('PNG screenshot assets verified.');
+          "
 
-      - name: Run automated MCP & guardrail test suite
+      - name: Run automated MCP and guardrail test suite
         run: node --test tests/opsflow.test.mjs
 
-      - name: Run live CLI inspector showcase
+      - name: Run 18-case deterministic evaluation benchmark
+        run: node src/evals.mjs
+
+      - name: Run CLI protocol trace
         run: node src/cli.mjs demo

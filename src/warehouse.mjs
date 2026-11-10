@@ -118,10 +118,7 @@ export const SLA_CONTRACTS = {
   }
 };
 
-/**
- * Creates an initialized, seeded SaaS Operations SQLite warehouse.
- * Enforces SQLite engine-level read-only mode (`PRAGMA query_only = ON`) after seeding.
- */
+// Applies PRAGMA query_only = ON and trusted_schema = OFF after seeding as a kernel-level read-only lock.
 export function createOpsWarehouse({ lockReadOnly = true } = {}) {
   const db = new DatabaseSync(':memory:');
 
@@ -219,10 +216,8 @@ export function createOpsWarehouse({ lockReadOnly = true } = {}) {
     insertAccount.run(...row);
   }
 
-  // Seed revenue_events including:
-  // - 3 NULL attribution_channel values out of 16 rows (18.75% null rate -> triggers >5% drift check)
-  // - 2 duplicate idempotency_key replays (evt_stripe_99214_dup, evt_stripe_99288_dup)
-  // - 1 high-magnitude Enterprise expansion outlier ($148,000)
+  // Intentional fixture anomalies for auditDatasetHealth: 3/16 NULL channels (18.75%),
+  // 2 duplicate Stripe idempotency keys, and 1 high-magnitude Enterprise expansion ($148,000).
   const insertRevEvent = db.prepare(`
     INSERT INTO revenue_events (
       idempotency_key, account_id, event_type, arr_delta_usd, attribution_channel, occurred_at
@@ -252,7 +247,6 @@ export function createOpsWarehouse({ lockReadOnly = true } = {}) {
     insertRevEvent.run(...row);
   }
 
-  // Seed weekly_kpi_snapshots for 3 trailing weeks so WoW KPI delta math is rich and exact
   const insertSnapshot = db.prepare(`
     INSERT INTO weekly_kpi_snapshots (
       week_start, segment, new_arr_usd, expansion_arr_usd, contraction_arr_usd,
@@ -280,7 +274,6 @@ export function createOpsWarehouse({ lockReadOnly = true } = {}) {
     insertSnapshot.run(...row);
   }
 
-  // Seed pipeline_runs including historical + current runs so outlier z-score & freshness checks operate on real rows
   const insertPipelineRun = db.prepare(`
     INSERT INTO pipeline_runs (
       run_id, pipeline_name, domain, completed_at, duration_sec,

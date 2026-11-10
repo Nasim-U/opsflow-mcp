@@ -15,6 +15,8 @@ import {
 import { auditDatasetHealth } from './health-audit.mjs';
 import { compileWeeklyExecDigest } from './exec-digest.mjs';
 import { runAutomationPlaybook, PLAYBOOK_CATALOG } from './playbooks.mjs';
+import { runEvalSuite } from './evals.mjs';
+import { renderWorkbenchHtml } from './ui/workbench.mjs';
 
 export const MCP_PROTOCOL_VERSION = '2024-11-05';
 
@@ -253,10 +255,6 @@ function jsonRpcError(id, code, message, data = undefined) {
   };
 }
 
-/**
- * Creates a standards-compliant OpsFlow MCP Server instance with structured audit logging
- * and sliding-window rate limiting.
- */
 export function createOpsFlowMcpServer({
   db = createOpsWarehouse(),
   maxCallsPerMinute = 60,
@@ -603,7 +601,7 @@ export function createOpsFlowMcpServer({
             content: [
               {
                 type: 'text',
-                text: JSON.stringify(payload, null, 2)
+                text: JSON.stringify(payload)
               }
             ],
             structuredContent: payload,
@@ -721,10 +719,7 @@ export function createOpsFlowMcpServer({
   };
 }
 
-/**
- * Starts the MCP JSON-RPC 2.0 server over stdio (newline-delimited JSON).
- * Audit logs are written exclusively to stderr so stdout remains pure JSON-RPC framing.
- */
+// Writes audit logs to stderr so stdout carries only newline-delimited JSON-RPC frames.
 export function startStdioServer({
   input = process.stdin,
   output = process.stdout,
@@ -760,18 +755,44 @@ export function startStdioServer({
   return { mcp, rl };
 }
 
-/**
- * Starts the MCP JSON-RPC 2.0 HTTP transport server (default 127.0.0.1:8762).
- */
 export function startHttpServer({
   host = '127.0.0.1',
   port = 8762,
   maxCallsPerMinute = 60
 } = {}) {
   const mcp = createOpsFlowMcpServer({ maxCallsPerMinute });
+  const workbenchHtml = renderWorkbenchHtml();
 
-  const httpServer = http.createServer((req, res) => {
+  const httpServer = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? `${host}:${port}`}`);
+
+    if (req.method === 'GET' && url.pathname === '/') {
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Length': Buffer.byteLength(workbenchHtml)
+      });
+      res.end(workbenchHtml);
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/evals') {
+      try {
+        const report = await runEvalSuite();
+        const body = JSON.stringify(report);
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Content-Length': Buffer.byteLength(body)
+        });
+        res.end(body);
+      } catch (err) {
+        const errBody = JSON.stringify({
+          error: err instanceof Error ? err.message : String(err)
+        });
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(errBody);
+      }
+      return;
+    }
 
     if (req.method === 'GET' && url.pathname === '/health') {
       const body = JSON.stringify({
@@ -828,7 +849,9 @@ export function startHttpServer({
     }
 
     res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ error: 'Not Found. Use POST /mcp or GET /health.' }));
+    res.end(
+      JSON.stringify({ error: 'Not Found. Use GET /, GET /evals, GET /health, or POST /mcp.' })
+    );
   });
 
   return new Promise((resolve, reject) => {
@@ -839,6 +862,8 @@ export function startHttpServer({
       resolve({
         mcp,
         httpServer,
+        workbenchUrl: `http://${host}:${boundPort}/`,
+        evalsUrl: `http://${host}:${boundPort}/evals`,
         url: `http://${host}:${boundPort}/mcp`,
         healthUrl: `http://${host}:${boundPort}/health`,
         close: () =>

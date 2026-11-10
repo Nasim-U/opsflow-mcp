@@ -25,10 +25,6 @@ function computeZScoreOutliers(items, valueSelector, threshold) {
   return outliers;
 }
 
-/**
- * Runs automated freshness, null-threshold, duplicate-key, and statistical outlier checks
- * across the SaaS operations warehouse, returning findings and deterministic remediation actions.
- */
 export function auditDatasetHealth(
   db,
   {
@@ -58,7 +54,6 @@ export function auditDatasetHealth(
     ? ['accounts', 'revenue_events', 'pipeline_runs', 'weekly_kpi_snapshots', 'support_escalations']
     : [dataset];
 
-  // 1. Freshness & SLA check across latest run of each pipeline
   if (dataset === 'all' || dataset === 'pipeline_runs') {
     const latestRuns = db.prepare(`
       WITH ranked AS (
@@ -126,7 +121,6 @@ export function auditDatasetHealth(
       }
     }
 
-    // Statistical runtime outlier check across pipeline_runs
     const allRuns = db.prepare(`
       SELECT run_id, pipeline_name, duration_sec, rows_processed, status
       FROM pipeline_runs
@@ -156,7 +150,6 @@ export function auditDatasetHealth(
     }
   }
 
-  // 2. Null-threshold & Duplicate-key & Outlier checks on revenue_events
   if (dataset === 'all' || dataset === 'revenue_events') {
     const nullStats = db.prepare(`
       SELECT
@@ -258,7 +251,6 @@ export function auditDatasetHealth(
     }
   }
 
-  // 3. Accounts ownership & hygiene check
   if (dataset === 'all' || dataset === 'accounts') {
     const accountChecks = db.prepare(`
       SELECT

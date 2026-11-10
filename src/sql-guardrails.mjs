@@ -42,10 +42,12 @@ const KNOWN_WAREHOUSE_TABLES = [
   'support_escalations'
 ];
 
-/**
- * Lexically sanitizes SQL by stripping comments and replacing string literals with placeholders,
- * allowing accurate multi-statement and forbidden-token detection without false positives on strings.
- */
+function isIdentifierChar(ch) {
+  return Boolean(ch) && /[A-Za-z0-9_]/.test(ch);
+}
+
+// Replaces string literals with placeholders before tokenizing so semicolons or keywords inside
+// quoted strings do not trigger false positives, while inline comments inside identifiers are checked.
 export function inspectSqlQuery(rawSql) {
   if (typeof rawSql !== 'string' || rawSql.trim().length === 0) {
     return {
@@ -64,6 +66,7 @@ export function inspectSqlQuery(rawSql) {
   }
 
   let stripped = '';
+  let commentCollapsed = '';
   let executable = '';
   let i = 0;
   const len = rawSql.length;
@@ -72,19 +75,19 @@ export function inspectSqlQuery(rawSql) {
     const ch = rawSql[i];
     const next = rawSql[i + 1];
 
-    // Line comment: -- ... \n
     if (ch === '-' && next === '-') {
       i += 2;
       while (i < len && rawSql[i] !== '\n') {
         i += 1;
       }
       stripped += ' ';
+      commentCollapsed += ' ';
       executable += ' ';
       continue;
     }
 
-    // Block comment: /* ... */
     if (ch === '/' && next === '*') {
+      const openIdx = i;
       const closeIdx = rawSql.indexOf('*/', i + 2);
       if (closeIdx === -1) {
         return {
@@ -93,13 +96,18 @@ export function inspectSqlQuery(rawSql) {
           reason: 'Unclosed block comment detected in SQL query.'
         };
       }
+      const splitsIdentifier =
+        openIdx > 0 &&
+        isIdentifierChar(rawSql[openIdx - 1]) &&
+        closeIdx + 2 < len &&
+        isIdentifierChar(rawSql[closeIdx + 2]);
       i = closeIdx + 2;
       stripped += ' ';
+      commentCollapsed += splitsIdentifier ? '' : ' ';
       executable += ' ';
       continue;
     }
 
-    // Single-quoted string literal: '...' (handles escaped '')
     if (ch === "'") {
       const startIdx = i;
       i += 1;
@@ -124,11 +132,11 @@ export function inspectSqlQuery(rawSql) {
         };
       }
       stripped += " '__STR__' ";
+      commentCollapsed += " '__STR__' ";
       executable += rawSql.slice(startIdx, i);
       continue;
     }
 
-    // Double-quoted identifier: "..."
     if (ch === '"') {
       const startIdx = i;
       i += 1;
@@ -156,16 +164,19 @@ export function inspectSqlQuery(rawSql) {
         };
       }
       stripped += ` ${ident} `;
+      commentCollapsed += ` ${ident} `;
       executable += rawSql.slice(startIdx, i);
       continue;
     }
 
     stripped += ch;
+    commentCollapsed += ch;
     executable += ch;
     i += 1;
   }
 
   const normalized = stripped.trim();
+  const normalizedCollapsed = commentCollapsed.trim();
   const normalizedExec = executable.trim();
   if (!normalized) {
     return {
@@ -175,10 +186,12 @@ export function inspectSqlQuery(rawSql) {
     };
   }
 
-  // Allow at most one trailing semicolon; block any interior semicolon (multi-statement injection)
   const withoutTrailingSemicolon = normalized.endsWith(';')
     ? normalized.slice(0, -1).trim()
     : normalized;
+  const collapsedWithoutSemicolon = normalizedCollapsed.endsWith(';')
+    ? normalizedCollapsed.slice(0, -1).trim()
+    : normalizedCollapsed;
   const executableWithoutSemicolon = normalizedExec.endsWith(';')
     ? normalizedExec.slice(0, -1).trim()
     : normalizedExec;
@@ -187,7 +200,7 @@ export function inspectSqlQuery(rawSql) {
     return {
       allowed: false,
       code: 'MULTI_STATEMENT_BLOCKED',
-      reason: 'Multi-statement SQL queries are prohibited by OpsFlow guardrails.'
+      reason: 'Multi-statement SQL queries are blocked by OpsFlow guardrails.'
     };
   }
 
@@ -204,12 +217,37 @@ export function inspectSqlQuery(rawSql) {
     };
   }
 
+  const tokenSet = new Set(tokens);
+  const collapsedTokens = collapsedWithoutSemicolon
+    .toUpperCase()
+    .split(/[^A-Z0-9_]+/)
+    .filter(Boolean);
+
+  for (const token of collapsedTokens) {
+    if (!tokenSet.has(token) && FORBIDDEN_KEYWORDS.has(token)) {
+      return {
+        allowed: false,
+        code: 'FORBIDDEN_SQL_KEYWORD',
+        blockedKeyword: token,
+        reason: `Comment-split SQL keyword '${token}' is blocked by read-only warehouse guardrails.`
+      };
+    }
+    if (!tokenSet.has(token) && SYSTEM_CATALOGS.has(token)) {
+      return {
+        allowed: false,
+        code: 'SYSTEM_CATALOG_BLOCKED',
+        blockedCatalog: token.toLowerCase(),
+        reason: `Direct access to SQLite catalog '${token.toLowerCase()}' is blocked. Read 'opsflow://schema/catalog' instead.`
+      };
+    }
+  }
+
   const rootKeyword = tokens[0];
   if (rootKeyword !== 'SELECT' && rootKeyword !== 'WITH') {
     return {
       allowed: false,
       code: 'NON_SELECT_ROOT_BLOCKED',
-      reason: `Only read-only SELECT or WITH ... SELECT queries are permitted (found root keyword: ${rootKeyword}).`
+      reason: `Only read-only SELECT or WITH ... SELECT queries are allowed (found root keyword: ${rootKeyword}).`
     };
   }
 
@@ -217,7 +255,7 @@ export function inspectSqlQuery(rawSql) {
     return {
       allowed: false,
       code: 'CTE_WITHOUT_SELECT_BLOCKED',
-      reason: 'WITH clause must terminate in a read-only SELECT statement.'
+      reason: 'WITH clause must end in a read-only SELECT statement.'
     };
   }
 
@@ -235,7 +273,7 @@ export function inspectSqlQuery(rawSql) {
         allowed: false,
         code: 'SYSTEM_CATALOG_BLOCKED',
         blockedCatalog: token.toLowerCase(),
-        reason: `Direct introspection of SQLite internal catalog '${token.toLowerCase()}' is restricted; read MCP resource 'opsflow://schema/catalog' instead.`
+        reason: `Direct access to SQLite catalog '${token.toLowerCase()}' is blocked. Read 'opsflow://schema/catalog' instead.`
       };
     }
   }
@@ -251,9 +289,6 @@ export function inspectSqlQuery(rawSql) {
   };
 }
 
-/**
- * Executes a guardrailed read-only analytical query with row-streaming limit enforcement and telemetry.
- */
 export function executeGuardrailedQuery(db, { sql, maxRows = DEFAULT_MAX_ROWS }) {
   const queryFingerprint = createHash('sha256')
     .update(String(sql ?? ''))

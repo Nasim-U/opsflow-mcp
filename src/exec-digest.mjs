@@ -13,10 +13,6 @@ function fmtSignedUsd(value) {
   return `${sign}$${Math.abs(Math.round(value)).toLocaleString('en-US')}`;
 }
 
-/**
- * Computes week-over-week KPI deltas, segment variance drivers, and top renewal risks,
- * returning structured telemetry plus Markdown and Slack Block Kit executive digests.
- */
 export function compileWeeklyExecDigest(
   db,
   { targetWeek = '2026-04-06', format = 'both' } = {}
@@ -110,7 +106,6 @@ export function compileWeeklyExecDigest(
     }
   };
 
-  // Segment variance drivers
   const segmentRows = db.prepare(`
     SELECT
       c.segment,
@@ -136,7 +131,6 @@ export function compileWeeklyExecDigest(
         : 0
   }));
 
-  // At-risk accounts enriched with seat utilization & open support escalations
   const riskWatchlist = db.prepare(`
     SELECT
       a.account_id,
@@ -161,26 +155,26 @@ export function compileWeeklyExecDigest(
   const totalAtRiskArrUsd = riskWatchlist.reduce((sum, r) => sum + r.arr_usd, 0);
 
   const markdownLines = [
-    `# Weekly Executive Operations Digest — Week of ${currentWeek}`,
-    `*Baseline comparison: ${priorWeek} | Source: OpsFlow Verified Warehouse*`,
+    `# Weekly Executive Operations Digest (${currentWeek})`,
+    `*Baseline comparison: ${priorWeek}, Source: OpsFlow Warehouse*`,
     '',
-    '## 1. Headline WoW KPI Scorecard',
-    `- **Net New ARR:** ${fmtUsd(kpis.netNewArr.currentUsd)} (${fmtSignedUsd(kpis.netNewArr.deltaUsd)} / ${kpis.netNewArr.wowPct > 0 ? '+' : ''}${kpis.netNewArr.wowPct}% WoW)`,
-    `- **Expansion ARR:** ${fmtUsd(kpis.expansionArr.currentUsd)} (${fmtSignedUsd(kpis.expansionArr.deltaUsd)} / ${kpis.expansionArr.wowPct > 0 ? '+' : ''}${kpis.expansionArr.wowPct}% WoW)`,
-    `- **Contraction + Churn ARR:** ${fmtUsd(kpis.grossChurnAndContractionArr.currentUsd)} (${fmtSignedUsd(kpis.grossChurnAndContractionArr.deltaUsd)} WoW)`,
+    '## 1. Headline WoW KPI scorecard',
+    `- **Net New ARR:** ${fmtUsd(kpis.netNewArr.currentUsd)} (${fmtSignedUsd(kpis.netNewArr.deltaUsd)}, ${kpis.netNewArr.wowPct > 0 ? '+' : ''}${kpis.netNewArr.wowPct}% WoW)`,
+    `- **Expansion ARR:** ${fmtUsd(kpis.expansionArr.currentUsd)} (${fmtSignedUsd(kpis.expansionArr.deltaUsd)}, ${kpis.expansionArr.wowPct > 0 ? '+' : ''}${kpis.expansionArr.wowPct}% WoW)`,
+    `- **Contraction and Churn ARR:** ${fmtUsd(kpis.grossChurnAndContractionArr.currentUsd)} (${fmtSignedUsd(kpis.grossChurnAndContractionArr.deltaUsd)} WoW)`,
     `- **Pipeline Coverage:** ${kpis.pipelineCoverageRatio.current}x (${kpis.pipelineCoverageRatio.delta >= 0 ? '+' : ''}${kpis.pipelineCoverageRatio.delta}x WoW)`,
-    `- **API Reliability & Support:** Avg p95 latency ${kpis.p95ApiLatencyMs.currentAvgMs}ms (Enterprise peak ${kpis.p95ApiLatencyMs.peakSegmentMs}ms) | ${kpis.supportSlaBreaches.current} SLA breaches`,
+    `- **API Reliability and Support:** Avg p95 latency ${kpis.p95ApiLatencyMs.currentAvgMs}ms (Enterprise peak ${kpis.p95ApiLatencyMs.peakSegmentMs}ms), ${kpis.supportSlaBreaches.current} SLA breaches`,
     '',
-    '## 2. Top Variance Drivers by Segment',
+    '## 2. Top variance drivers by segment',
     ...segmentRows.map(
       (s) =>
-        `- **${s.segment}:** ${fmtUsd(s.current_net_new_arr)} Net New ARR (${fmtSignedUsd(s.wow_delta_usd)} WoW, ${s.shareOfTotalDeltaPct}% of net variance; coverage ${s.pipeline_coverage_ratio}x)`
+        `- **${s.segment}:** ${fmtUsd(s.current_net_new_arr)} Net New ARR (${fmtSignedUsd(s.wow_delta_usd)} WoW, ${s.shareOfTotalDeltaPct}% of net variance, coverage ${s.pipeline_coverage_ratio}x)`
     ),
     '',
-    `## 3. Renewal Risk Watchlist (${fmtUsd(totalAtRiskArrUsd)} ARR Exposed)`,
+    `## 3. Renewal risk watchlist (${fmtUsd(totalAtRiskArrUsd)} ARR exposed)`,
     ...riskWatchlist.map(
       (r) =>
-        `- **${r.company_name}** (${r.segment} · ${r.region}) — ${fmtUsd(r.arr_usd)} ARR | Health ${r.health_score}/100 | Seat util ${r.seat_utilization_pct}% | Renewal ${r.renewal_date} | Open escalations: ${r.open_escalations}${r.highest_open_severity ? ` (${r.highest_open_severity})` : ''}`
+        `- **${r.company_name}** (${r.segment}, ${r.region}): ${fmtUsd(r.arr_usd)} ARR, Health ${r.health_score}/100, Seat util ${r.seat_utilization_pct}%, Renewal ${r.renewal_date}, Open escalations: ${r.open_escalations}${r.highest_open_severity ? ` (${r.highest_open_severity})` : ''}`
     )
   ];
 
@@ -191,7 +185,7 @@ export function compileWeeklyExecDigest(
       type: 'header',
       text: {
         type: 'plain_text',
-        text: `OpsFlow Executive Brief — Week of ${currentWeek}`
+        text: `OpsFlow Executive Brief (${currentWeek})`
       }
     },
     {
@@ -199,7 +193,7 @@ export function compileWeeklyExecDigest(
       fields: [
         {
           type: 'mrkdwn',
-          text: `*Net New ARR*\n${fmtUsd(kpis.netNewArr.currentUsd)} (${fmtSignedUsd(kpis.netNewArr.deltaUsd)} / +${kpis.netNewArr.wowPct}% WoW)`
+          text: `*Net New ARR*\n${fmtUsd(kpis.netNewArr.currentUsd)} (${fmtSignedUsd(kpis.netNewArr.deltaUsd)}, +${kpis.netNewArr.wowPct}% WoW)`
         },
         {
           type: 'mrkdwn',
@@ -225,7 +219,7 @@ export function compileWeeklyExecDigest(
           segmentRows
             .map(
               (s) =>
-                `• *${s.segment}:* ${fmtUsd(s.current_net_new_arr)} (${fmtSignedUsd(s.wow_delta_usd)} WoW · ${s.shareOfTotalDeltaPct}% of gain)`
+                `- *${s.segment}:* ${fmtUsd(s.current_net_new_arr)} (${fmtSignedUsd(s.wow_delta_usd)} WoW, ${s.shareOfTotalDeltaPct}% of gain)`
             )
             .join('\n')
       }
@@ -235,7 +229,7 @@ export function compileWeeklyExecDigest(
       elements: [
         {
           type: 'mrkdwn',
-          text: `Baseline week: ${priorWeek} | Peak Enterprise p95 latency: ${kpis.p95ApiLatencyMs.peakSegmentMs}ms | Generated by OpsFlow MCP`
+          text: `Baseline week: ${priorWeek}, Peak Enterprise p95 latency: ${kpis.p95ApiLatencyMs.peakSegmentMs}ms, Source: OpsFlow MCP`
         }
       ]
     }
