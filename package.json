@@ -1,0 +1,34 @@
+{
+  "name": "opsflow-mcp",
+  "version": "1.0.0",
+  "description": "Production Model Context Protocol (MCP) server, guardrailed SQL analytics tools, reusable agent skills, and automated ops workflow engine",
+  "type": "module",
+  "license": "MIT",
+  "author": "Nasim Uddin (@Nasim-U)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Nasim-U/opsflow-mcp.git"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "bin": {
+    "opsflow-mcp": "./src/cli.mjs"
+  },
+  "scripts": {
+    "test": "node --test tests/opsflow.test.mjs",
+    "demo": "node src/cli.mjs demo",
+    "serve:stdio": "node src/cli.mjs serve-stdio",
+    "serve:http": "node src/cli.mjs serve-http"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai-agents",
+    "workflow-automation",
+    "analytics-engineering",
+    "sql-guardrails",
+    "sqlite",
+    "llm-tools"
+  ]
+}

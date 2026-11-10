@@ -1,0 +1,34 @@
+name: OpsFlow MCP CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: MCP Protocol, Guardrails & Playbook Suite (Node 24)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Validate SVG visual assets XML syntax
+        run: |
+          python3 -c "import xml.etree.ElementTree as ET; [ET.parse(p) for p in ['docs/mcp-preview.svg', 'docs/workflow-architecture.svg']]; print('SVG XML validation passed.')"
+
+      - name: Run automated MCP & guardrail test suite
+        run: node --test tests/opsflow.test.mjs
+
+      - name: Run live CLI inspector showcase
+        run: node src/cli.mjs demo
